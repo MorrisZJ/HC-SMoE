@@ -5,6 +5,9 @@ export TOKENIZERS_PARALLELISM="false"
 export HF_HOME="${HF_HOME:-/scratch/mz81/huggingface}"
 mkdir -p "$HF_HOME"
 
+OUTPUT_BASE="${1:-results/qwen/merge-45e/test}"
+mkdir -p "$OUTPUT_BASE"
+
 accelerate launch --config_file static/finetune_config.yaml \
   --main_process_port 29512 hcsmoe/merging-qwen.py \
   --model_name="Qwen/Qwen1.5-MoE-A2.7B-Chat" \
@@ -18,5 +21,5 @@ accelerate launch --config_file static/finetune_config.yaml \
   --n_sentences=32 \
   --train_batch_size=2 \
   --eval_batch_size=16 \
-  --result_path="results/results_qwen_test.txt" \
-  --output_path="results/qwen/merge-45e/test" |& tee results/log_45e_test
+  --result_path="${OUTPUT_BASE}/results_qwen_test.txt" \
+  --output_path="${OUTPUT_BASE}" |& tee "${OUTPUT_BASE}/log_45e_test"
