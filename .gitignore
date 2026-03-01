@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+*.egg
+.Python
+.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~
+
+# Models & outputs (do not push)
+*.pt
+*.bin
+*.safetensors
+saved_models/
+exp_output/
+hcsmoe/data/*.json
+
+# Logs
+*.log
+log_*
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
