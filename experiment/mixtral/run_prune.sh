@@ -22,10 +22,11 @@ export NCCL_P2P_DISABLE=0
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 export TOKENIZERS_PARALLELISM="false"
-export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
+export HF_HOME="${HF_HOME:-/scratch/mz81/huggingface}"
+mkdir -p "$HF_HOME"
 
 MODEL_NAME="${MODEL_NAME:-mistralai/Mixtral-8x7B-v0.1}"
-OUTPUT_BASE="${1:-${OUTPUT_BASE:-saved_models/mixtral/prune}}"
+OUTPUT_BASE="${1:-${OUTPUT_BASE:-/scratch/mz81/hc_smoe/mixtral/prune}}"
 mkdir -p "$OUTPUT_BASE"
 N_SENTENCES="${N_SENTENCES:-32}"
 TRAIN_BS="${TRAIN_BS:-2}"

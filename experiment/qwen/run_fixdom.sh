@@ -17,10 +17,11 @@ export NCCL_P2P_DISABLE=0
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 export TOKENIZERS_PARALLELISM="false"
-export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
+export HF_HOME="${HF_HOME:-/scratch/mz81/huggingface}"
+mkdir -p "$HF_HOME"
 
 MODEL_NAME="${MODEL_NAME:-Qwen/Qwen1.5-MoE-A2.7B-Chat}"
-OUTPUT_BASE="${1:-${OUTPUT_BASE:-saved_models/qwen/fixdom}}"
+OUTPUT_BASE="${1:-${OUTPUT_BASE:-/scratch/mz81/hc_smoe/qwen/fixdom}}"
 mkdir -p "$OUTPUT_BASE"
 N_SENTENCES="${N_SENTENCES:-32}"
 TRAIN_BS="${TRAIN_BS:-2}"

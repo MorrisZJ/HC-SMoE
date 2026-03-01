@@ -3,7 +3,9 @@
 # @Time: 2024/2/18
 import os
 import gc
+import shutil
 import sys
+import tempfile
 import time
 import pickle
 from typing import Optional
@@ -14,7 +16,7 @@ from fire import Fire
 from transformers import Qwen2MoeForCausalLM, AutoTokenizer
 
 from hcsmoe.evaluation import get_minipile_dataloder, evaluate_minipile_perplexity, evaluate_fewshot, get_calib_dataloder
-from hcsmoe.merging.grouping_qwen import ExpertsGrouperForQwen2MoE, merge_by_groups_with_usage_weighted, merge_by_groups_within_and_across_models
+from hcsmoe.merging.grouping_qwen import ExpertsGrouperForQwen2MoE, merge_by_groups_with_usage_weighted, merge_by_groups_with_uniform_average, merge_by_groups_within_and_across_models
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +137,7 @@ def run_hcsmoe(
         model_name: Optional[str] = "Qwen/Qwen1.5-MoE-A2.7B-Chat",
         dominant: Optional[str] = "knowledge", # random, frequency, knowledge
         similarity_base: Optional[str] = "router-logits", # router-logits, weight, expert-output
-        merge: Optional[str] = "zipit", # no, freq, zipit, update, fix-dom, unmerge,ix-dom-same
+        merge: Optional[str] = "zipit", # no, freq, zipit, update, fix-dom, unmerge, uniform, debug
         mode: Optional[str] = "normal", # normal, activation-with-router-logits, input-weight, all
         n_sentences: Optional[int] = 32,
         train_batch_size: Optional[int] = 4,
@@ -197,24 +199,29 @@ def run_hcsmoe(
     if model_path:
         model.load_state_dict(torch.load(model_name))
     model.eval()
-    dataloader_for_merging = get_dataloader(args, tokenizer)
+    debug_or_uniform = merge in ("debug", "uniform")
+    if debug_or_uniform:
+        dataloader_for_merging = None  # No calibration data needed for random grouping + uniform average
+        print("[HC-SMoE] DEBUG/UNIFORM mode: no calibration data, random grouping + uniform average merge")
+    else:
+        dataloader_for_merging = get_dataloader(args, tokenizer)
     grouper = get_grouper(args, model.config)
 
     # HC-SMoE!
     print("[HC-SMoE] Number of parameters before merging:", model.num_parameters())
     print(f"[HC-SMoE] Merging into average {num_average_groups} groups...")
     group_st = time.time()
-    if merge == "freq" or dominant == "frequency":
+    if not debug_or_uniform and (merge == "freq" or dominant == "frequency"):
         grouper.compute_all_usages(model, dataloader_for_merging)
         print_usage_frequency(grouper._usage_frequency_state_dict)
-    if dynamic_group:
+    if not debug_or_uniform and dynamic_group:
         grouper.compute_all_usages(model, dataloader_for_merging, mode=hierarchical_stopping_metric)
         print_usage_frequency(grouper._usage_frequency_state_dict)
     
 
     ### 2. Get dominant experts
     dom_experts = None
-    if dominant == "random":
+    if debug_or_uniform or dominant == "random":
         grouper.group_experts_randomly(num_groups=num_average_groups)
         dom_experts = None
     elif dominant == "frequency":
@@ -238,6 +245,10 @@ def run_hcsmoe(
     ### 3. Merging
     if merge == "freq":
         model = merge_by_groups_with_usage_weighted(
+            model, grouper=grouper, merging_layers=list(range(start_layer, model.config.num_hidden_layers))
+        )
+    elif merge in ("debug", "uniform"):
+        model = merge_by_groups_with_uniform_average(
             model, grouper=grouper, merging_layers=list(range(start_layer, model.config.num_hidden_layers))
         )
     else:
@@ -269,11 +280,19 @@ def run_hcsmoe(
     ### 5. Save model
     print("[HC-SMoE] Number of parameters after merging:", model.num_parameters())
     os.makedirs(output_path, exist_ok=True)
-    # Save in native HuggingFace format.  Qwen2MoeForCausalLM is a standard HF model
-    # type so no custom modeling files are needed.  Loading in benchmark:
-    #   AutoModelForCausalLM.from_pretrained(output_path, trust_remote_code=True)
-    model.save_pretrained(output_path)
-    tokenizer.save_pretrained(output_path)
+    # Save to node-local temp first to avoid NFS/network FS write errors (large .bin files)
+    tmp_dir = os.environ.get("TMPDIR") or os.environ.get("SLURM_TMPDIR") or "/tmp"
+    with tempfile.TemporaryDirectory(prefix="hcsmoe_save_", dir=tmp_dir) as tmp_save:
+        model.save_pretrained(tmp_save, safe_serialization=False)
+        tokenizer.save_pretrained(tmp_save)
+        os.makedirs(output_path, exist_ok=True)
+        for name in os.listdir(tmp_save):
+            src = os.path.join(tmp_save, name)
+            dst = os.path.join(output_path, name)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
     print(f"[HC-SMoE] Model and tokenizer saved to {output_path} (HuggingFace format).")
 
 

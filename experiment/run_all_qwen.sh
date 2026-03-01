@@ -40,7 +40,7 @@ export TRAIN_BS="${TRAIN_BS:-2}"
 export ACCEL_CONFIG="${ACCEL_CONFIG:-static/finetune_config.yaml}"
 
 # Positional arg (highest priority) > MODELS_ROOT env var > default
-_MODELS_ROOT="${1:-${MODELS_ROOT:-saved_models/qwen}}"
+_MODELS_ROOT="${1:-${MODELS_ROOT:-/scratch/mz81/hc_smoe/qwen}}"
 mkdir -p "$_MODELS_ROOT"
 
 IFS=' ' read -r -a _SIZES <<< "${GROUP_SIZES:-16 24 32 45}"

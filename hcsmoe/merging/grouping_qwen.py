@@ -1260,6 +1260,33 @@ def _merge_mlp_experts_by_usage_frequency_weighting(
 
 
 @torch.no_grad()
+def _merge_mlp_experts_by_uniform_average(
+        ffn: Qwen2MoeSparseMoeBlock,
+        group_labels: torch.LongTensor,
+) -> Qwen2MoeSparseMoeBlock:
+    """Merge experts within each group by simple uniform average (no calibration data).
+    Used for debug/fast pipeline testing."""
+    for label in group_labels.unique():
+        expert_indices = torch.where(group_labels == label)[0]
+        n = len(expert_indices)
+        gate_proj_weight = torch.stack(
+            [ffn.experts[expert_idx].gate_proj.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        down_proj_weight = torch.stack(
+            [ffn.experts[expert_idx].down_proj.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        up_proj_weight = torch.stack(
+            [ffn.experts[expert_idx].up_proj.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        ffn.experts[expert_indices[0]].gate_proj.weight.copy_(gate_proj_weight)
+        ffn.experts[expert_indices[0]].down_proj.weight.copy_(down_proj_weight)
+        ffn.experts[expert_indices[0]].up_proj.weight.copy_(up_proj_weight)
+        for expert_idx in expert_indices[1:]:
+            ffn.experts[expert_idx] = ffn.experts[expert_indices[0]]
+    return ffn
+
+
+@torch.no_grad()
 def _zipit_merge(temp_dim, target_dim, weight1, weight3, data, _device, _dtype):
     permutation_matrix = torch.eye(temp_dim, temp_dim, dtype=_dtype, device=_device)
     ROUND = 0
@@ -2085,6 +2112,30 @@ def merge_by_groups_with_usage_weighted(
             ffn=model.model.layers[layer_idx].mlp,
             group_labels=group_labels,
             usage_frequencies=usage_frequencies,
+        )
+    return model
+
+
+@torch.no_grad()
+def merge_by_groups_with_uniform_average(
+        model: Qwen2MoeForCausalLM,
+        grouper: ExpertsGrouperForQwen2MoE,
+        merging_layers: Optional[List[int]] = None,
+) -> Qwen2MoeForCausalLM:
+    """Merge experts within each group by uniform weight average. No calibration data needed.
+    For debug mode: fast pipeline test (load -> group randomly -> merge -> save -> eval)."""
+    group_labels_dict = grouper.group_state_dict()
+    for layer_idx in tqdm(
+            grouper.sparse_layer_indices,
+            desc="[HC-SMoE] Merging experts with uniform average (debug)..."
+    ):
+        if merging_layers is not None and layer_idx not in merging_layers:
+            continue
+        ffn_name = f"model.layers.{layer_idx}.mlp"
+        group_labels = group_labels_dict[ffn_name]
+        model.model.layers[layer_idx].mlp = _merge_mlp_experts_by_uniform_average(
+            ffn=model.model.layers[layer_idx].mlp,
+            group_labels=group_labels,
         )
     return model
 
