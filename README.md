@@ -6,6 +6,27 @@ In this work, we propose HC-SMoE (Hierarchical Clustering for Sparsely activated
 
 ![figure](./assets/main-idea-new.png)
 
+## Helper Scripts Quick Reference
+
+One-line reference for data download, model conversion, merge runs, evaluation, and push to HuggingFace. All commands assume you are in the **repo root**. For full options see [scripts/README.md](./scripts/README.md) and [experiment/README.md](./experiment/README.md).
+
+| What | Command |
+|------|--------|
+| **Data: C4 calibration** | `bash experiment/download_c4.sh` — downloads C4 to `hcsmoe/data/`. Optional: `NUM=512 bash experiment/download_c4.sh` |
+| **Model: Mixtral → SDPA (no flash-attn)** | `bash scripts/run_convert_mixtral_sdpa.sh` — download + convert to loadable-without-flash-attn. Output default: `/mnt/scratch/model_zoo/Mixtral-8x7B-v0.1-sdpa` |
+| **Model: convert only (no re-download)** | `FROM_LOCAL=/path/to/Mixtral bash scripts/run_convert_mixtral_sdpa.sh` |
+| **Model: convert + push to HF** | `PUSH_TO_HUB=1 bash scripts/run_convert_mixtral_sdpa.sh` (default repo: `morriszjm/Mixtral-8x7B-v0.1-sdpa`). Requires `huggingface-cli login` |
+| **Merge: Mixtral ZipIt** | `NUM_GROUPS=4 bash experiment/mixtral/run_zipit.sh`. Override output: `OUTPUT_BASE=/path bash experiment/mixtral/run_zipit.sh` |
+| **Merge: Mixtral debug** | `bash experiment/mixtral/run_debug.sh` — random grouping + uniform average (fast pipeline test) |
+| **Merge: Qwen ZipIt / debug** | `NUM_GROUPS=45 bash experiment/qwen/run_zipit.sh`; `bash experiment/qwen/run_debug.sh` |
+| **Eval: Winogrande (local dir)** | `bash scripts/run_eval_winogrande.sh /path/to/saved_model` |
+| **Eval: Winogrande (HF model ID)** | `bash scripts/run_eval_winogrande.sh morriszjm/Mixtral-8x7B-v0.1-sdpa` |
+| **Push merged model to HF** | `python scripts/upload_to_hf.py /path/to/model_dir <username>/repo-name` (optional: `--private`) |
+
+**Cache / env:** To point HuggingFace cache elsewhere (e.g. a large disk):  
+`export HF_HOME=/path/to/cache/huggingface` and `export HF_DATASETS_CACHE=$HF_HOME/datasets`.
+
+---
 
 ## Updates
 - [2025/05/01] :fire: Our paper, **Retraining-Free Merging of Sparse Mixture-of-Experts via Hierarchical Clustering**, has been accepted by **ICML 2025**!

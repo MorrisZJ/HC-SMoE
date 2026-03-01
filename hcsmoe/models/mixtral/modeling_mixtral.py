@@ -18,8 +18,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch Mixtral model."""
+import importlib.util
 import inspect
 import math
+import os
 import warnings
 from typing import List, Optional, Tuple, Union
 
@@ -51,17 +53,41 @@ from transformers.utils import (
 )
 from transformers.utils.import_utils import is_torch_fx_available
 
+# Load MixtralConfig from same dir so Hub loading (trust_remote_code) does not require
+# "configuration_mixtral" as an installed package (transformers check_imports would fail).
 try:
     from .configuration_mixtral import MixtralConfig
 except ImportError:
-    # Fallback when the file is loaded as a standalone module via trust_remote_code.
-    from configuration_mixtral import MixtralConfig  # type: ignore[no-redef]
+    _config_dir = os.path.dirname(os.path.abspath(__file__))
+    _config_path = os.path.join(_config_dir, "configuration_mixtral.py")
+    _spec = importlib.util.spec_from_file_location("_hcsmoe_mixtral_config", _config_path)
+    _config_mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_config_mod)
+    MixtralConfig = _config_mod.MixtralConfig  # noqa: F811
 
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+# Lazy-load flash_attn via importlib so transformers check_imports() does not require it when loading saved models.
+_flash_attn_func = _flash_attn_varlen_func = _pad_input = _index_first_axis = _unpad_input = None
+_flash_supports_window_size = False
 
-    _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
+def _ensure_flash_attn():
+    global _flash_attn_func, _flash_attn_varlen_func, _pad_input, _index_first_axis, _unpad_input, _flash_supports_window_size
+    if _flash_attn_func is not None:
+        return True
+    if not is_flash_attn_2_available():
+        return False
+    try:
+        import importlib
+        fa = importlib.import_module("flash_attn")
+        fa_bert = importlib.import_module("flash_attn.bert_padding")
+        _flash_attn_func = fa.flash_attn_func
+        _flash_attn_varlen_func = fa.flash_attn_varlen_func
+        _pad_input = fa_bert.pad_input
+        _index_first_axis = fa_bert.index_first_axis
+        _unpad_input = fa_bert.unpad_input
+        _flash_supports_window_size = "window_size" in list(inspect.signature(_flash_attn_func).parameters)
+        return True
+    except ImportError:
+        return False
 
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
@@ -460,6 +486,9 @@ class MixtralFlashAttention2(MixtralAttention):
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
+        if not _ensure_flash_attn():
+            raise RuntimeError("flash_attn is required for MixtralFlashAttention2 but not installed. Install it or use attn_implementation='sdpa'.")
+
         use_sliding_windows = (
                 _flash_supports_window_size
                 and getattr(self.config, "sliding_window", None) is not None
@@ -601,7 +630,7 @@ class MixtralFlashAttention2(MixtralAttention):
             max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
 
             if not use_sliding_windows:
-                attn_output_unpad = flash_attn_varlen_func(
+                attn_output_unpad = _flash_attn_varlen_func(
                     query_states,
                     key_states,
                     value_states,
@@ -614,7 +643,7 @@ class MixtralFlashAttention2(MixtralAttention):
                     causal=causal,
                 )
             else:
-                attn_output_unpad = flash_attn_varlen_func(
+                attn_output_unpad = _flash_attn_varlen_func(
                     query_states,
                     key_states,
                     value_states,
@@ -628,10 +657,10 @@ class MixtralFlashAttention2(MixtralAttention):
                     window_size=(self.config.sliding_window, self.config.sliding_window),
                 )
 
-            attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
+            attn_output = _pad_input(attn_output_unpad, indices_q, batch_size, query_length)
         else:
             if not use_sliding_windows:
-                attn_output = flash_attn_func(
+                attn_output = _flash_attn_func(
                     query_states,
                     key_states,
                     value_states,
@@ -640,7 +669,7 @@ class MixtralFlashAttention2(MixtralAttention):
                     causal=causal,
                 )
             else:
-                attn_output = flash_attn_func(
+                attn_output = _flash_attn_func(
                     query_states,
                     key_states,
                     value_states,
@@ -663,11 +692,11 @@ class MixtralFlashAttention2(MixtralAttention):
 
         indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(attention_mask)
 
-        key_layer = index_first_axis(key_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
-        value_layer = index_first_axis(value_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
+        key_layer = _index_first_axis(key_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
+        value_layer = _index_first_axis(value_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
 
         if query_length == kv_seq_len:
-            query_layer = index_first_axis(
+            query_layer = _index_first_axis(
                 query_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k
             )
             cu_seqlens_q = cu_seqlens_k
@@ -683,7 +712,7 @@ class MixtralFlashAttention2(MixtralAttention):
         else:
             # The -q_len: slice assumes left padding.
             attention_mask = attention_mask[:, -query_length:]
-            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(query_layer, attention_mask)
+            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = _unpad_input(query_layer, attention_mask)
 
         return (
             query_layer,

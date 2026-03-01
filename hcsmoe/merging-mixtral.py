@@ -32,7 +32,11 @@ _HCSMOE_MIXTRAL_SRC_DIR = os.path.dirname(
 
 from hcsmoe.evaluation import evaluate_fewshot, get_calib_dataloder
 from hcsmoe.merging.grouping_mixtral import ExpertsGrouperForMixtral
-from hcsmoe.merging.grouping_mixtral import merge_by_groups_with_usage_weighted, merge_by_groups_within_and_across_models
+from hcsmoe.merging.grouping_mixtral import (
+    merge_by_groups_with_usage_weighted,
+    merge_by_groups_with_uniform_average,
+    merge_by_groups_within_and_across_models,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +337,10 @@ def run_hcsmoe(
         model = merge_by_groups_with_usage_weighted(
             model, grouper=grouper, merging_layers=list(range(start_layer, model.config.num_hidden_layers))
         )
+    elif merge == "uniform":
+        model = merge_by_groups_with_uniform_average(
+            model, grouper=grouper, merging_layers=list(range(start_layer, model.config.num_hidden_layers))
+        )
     else:
         model = merge_by_groups_within_and_across_models(
             mixtral_model=model,
@@ -377,7 +385,8 @@ def run_hcsmoe(
     model.config = hcsmoe_config
 
     os.makedirs(output_path, exist_ok=True)
-    model.save_pretrained(output_path)
+    # Merged experts share tensors; safe_serialization cannot represent that, so use PyTorch format.
+    model.save_pretrained(output_path, safe_serialization=False)
     tokenizer.save_pretrained(output_path)
 
     # Copy the HC-SMoE Mixtral source files so that the saved directory is self-contained.

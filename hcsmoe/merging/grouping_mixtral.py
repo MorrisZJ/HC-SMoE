@@ -1248,6 +1248,33 @@ def _merge_mlp_experts_by_usage_frequency_weighting(
 
 
 @torch.no_grad()
+def _merge_mlp_experts_by_uniform_average(
+        ffn: MixtralSparseMoeBlock,
+        group_labels: torch.LongTensor,
+) -> MixtralSparseMoeBlock:
+    """Merge experts within each group by simple uniform average (no calibration data).
+    Used for debug/fast pipeline testing."""
+    for label in group_labels.unique():
+        expert_indices = torch.where(group_labels == label)[0]
+        n = len(expert_indices)
+        w1_weight = torch.stack(
+            [ffn.experts[expert_idx].w1.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        w2_weight = torch.stack(
+            [ffn.experts[expert_idx].w2.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        w3_weight = torch.stack(
+            [ffn.experts[expert_idx].w3.weight for expert_idx in expert_indices], dim=0
+        ).mean(dim=0)
+        ffn.experts[expert_indices[0]].w1.weight.copy_(w1_weight)
+        ffn.experts[expert_indices[0]].w2.weight.copy_(w2_weight)
+        ffn.experts[expert_indices[0]].w3.weight.copy_(w3_weight)
+        for expert_idx in expert_indices[1:]:
+            ffn.experts[expert_idx] = ffn.experts[expert_indices[0]]
+    return ffn
+
+
+@torch.no_grad()
 def _zipit_merge(temp_dim, target_dim, weight1, weight3, data,):
     permutation_matrix = torch.eye(temp_dim, temp_dim).to(weight1.dtype)
     ROUND = 0
@@ -2320,6 +2347,30 @@ def _merge_moe_experts_within_and_across_models(
     # print(moe.expert_dict)
     # moe.forward = MethodType(merged_moe_forward, moe)
     return new_moe
+
+
+@torch.no_grad()
+def merge_by_groups_with_uniform_average(
+        model: MixtralForCausalLM,
+        grouper: ExpertsGrouperForMixtral,
+        merging_layers: Optional[List[int]] = None,
+) -> MixtralForCausalLM:
+    """Merge experts within each group by uniform weight average. No calibration data needed.
+    For debug mode: fast pipeline test (load -> group randomly -> merge -> save -> eval)."""
+    group_labels_dict = grouper.group_state_dict()
+    for layer_idx in tqdm(
+            grouper.sparse_layer_indices,
+            desc="[HC-SMoE] Merging experts with uniform average (debug)..."
+    ):
+        if merging_layers is not None and layer_idx not in merging_layers:
+            continue
+        ffn_name = f"model.layers.{layer_idx}.block_sparse_moe"
+        group_labels = group_labels_dict[ffn_name]
+        model.model.layers[layer_idx].block_sparse_moe = _merge_mlp_experts_by_uniform_average(
+            ffn=model.model.layers[layer_idx].block_sparse_moe,
+            group_labels=group_labels,
+        )
+    return model
 
 
 @torch.no_grad()

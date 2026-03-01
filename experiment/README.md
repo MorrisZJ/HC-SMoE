@@ -70,6 +70,15 @@ OUTPUT_BASE="my_output/mixtral" \
 bash experiment/mixtral/run_zipit.sh
 ```
 
+### Mixtral — debug (random grouping + uniform merge)
+
+Fast pipeline test, no ZipIt/calibration:
+
+```bash
+bash experiment/mixtral/run_debug.sh
+NUM_GROUPS=4 bash experiment/mixtral/run_debug.sh saved_models/mixtral/debug
+```
+
 ### Qwen — run everything
 
 ```bash

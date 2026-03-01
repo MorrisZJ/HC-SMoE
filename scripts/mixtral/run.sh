@@ -2,7 +2,7 @@ export NCCL_P2P_DISABLE=0
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 export TOKENIZERS_PARALLELISM="false"
-export HF_HOME="${HF_HOME:-/scratch/mz81/huggingface}"
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 mkdir -p "$HF_HOME"
 
 OUTPUT_BASE="${1:-results}"
